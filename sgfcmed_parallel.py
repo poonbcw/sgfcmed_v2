@@ -59,6 +59,7 @@ class SGFCMedParallel:
         self.tol = tol  # convergence threshold
         self.prototypes_ = []  # list of prototype strings (cluster centers)
         self.U_ = []  # fuzzy membership matrix
+        self.__debug_candidates_per_cluster = {}
 
         random.seed(42)  # ensure reproducible random initialization
 
@@ -117,12 +118,13 @@ class SGFCMedParallel:
 
     #     return s
 
-    def _update_prototype(self, s, S, alphabet):
+    def _update_prototype(self, s, S, alphabet, cluster_idx=None):
+        all_candidates_per_round = []
         for i in range(len(s)):
             candidates = [s]
 
             for a in alphabet:
-                if a != s[i]:
+                if i < len(s) and a != s[i]:
                     candidates.append(s[:i] + a + s[i+1:]) # s[:i] แทน a ที่ตำแหน่งนั้น , s[i+1:] เอาข้างหลังทั้งหมด
 
             if len(s) > 1:
@@ -131,6 +133,12 @@ class SGFCMedParallel:
             for a in alphabet:
                 candidates.append(s[:i] + a + s[i:]) # s[i:] เอาข้างหลังทั้งหมดรวมตัวที่ i ด้วย
 
+            all_candidates_per_round.append(candidates.copy())
+
+            # print("round " , i)
+            # for c in candidates:
+            #     print(c)
+            
             # ใช้ multiprocessing
             # ถ้าใช้ candidate เป็น prototype ของกลุ่ม จะมี total distance กับทุก string ใน S เท่าไหร่
             func = partial(parallel_total_distance, S=S) # def func(candidate): return parallel_total_distance(candidate, S=S)
@@ -139,7 +147,9 @@ class SGFCMedParallel:
                 # ใช้ pool.map เพื่อส่ง แต่ละค่าใน candidates ไปให้ func แบบขนาน
                 # results = [func(c) for c in candidates]
             s = min(results, key=lambda x: x[1])[0] # หา tuple ที่มี distance น้อยที่สุด , [0] เอาเฉพาะ string ที่ดีที่สุด
-            # print(s) 
+            if cluster_idx is not None:
+                self.__debug_candidates_per_cluster[cluster_idx] = all_candidates_per_round
+            # print("candidate ", i , " " ,s) 
 
         return s
 
@@ -164,7 +174,7 @@ class SGFCMedParallel:
 
             # Step 3: Update cluster prototypes using modified median
             for i in range(self.C):
-                self.prototypes_[i] = self._update_prototype(self.prototypes_[i], S, alphabet)
+                self.prototypes_[i] = self._update_prototype(self.prototypes_[i], S, alphabet,cluster_idx=i)
                 # print(i , " : " + self.prototypes_[i])
 
             # Step 4: Update fuzzy membership values based on distance to prototypes
@@ -176,11 +186,11 @@ class SGFCMedParallel:
                         for j in range(self.C)
                     )
                     self.U_[k][i] = 1 / (denom + 1e-6)
-            print(self.U_)
+            # print(self.U_)
 
             # Step 5: Check for convergence (change in prototypes)
             change = sum(self._levenshtein(p1, p2) for p1, p2 in zip(old_prototypes, self.prototypes_))
-            print("change ",change)
+            # print("change ",change)
             if change < self.tol:
                 break
 
@@ -205,3 +215,12 @@ class SGFCMedParallel:
             distances = [self._levenshtein(s, proto) for proto in self.prototypes_]
             preds.append(distances.index(min(distances)))  # cluster with min distance
         return preds
+    
+    def get_debug_candidates(self, cluster_idx=None):
+        """
+        Return generated candidate prototypes for testing/debugging.
+        If cluster_idx is given, return candidates for that cluster only.
+        """
+        if cluster_idx is not None:
+            return self.__debug_candidates_per_cluster.get(cluster_idx, [])
+        return self.__debug_candidates_per_cluster
